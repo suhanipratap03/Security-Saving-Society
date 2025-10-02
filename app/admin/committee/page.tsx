@@ -1,5 +1,5 @@
 "use client"
-import { useState, useEffect } from "react"
+import { useState, useEffect, Suspense } from "react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -31,12 +31,14 @@ interface Committee {
   completedAt: string
 }
 
-export default function CommitteeManagement() {
+function CommitteeManagementContent() {
   const [committees, setCommittees] = useState<Committee[]>([])
   const [searchTerm, setSearchTerm] = useState("")
   const [selectedCommittee, setSelectedCommittee] = useState("all")
   const [statusFilter, setStatusFilter] = useState("all")
   const [selectedMonth, setSelectedMonth] = useState<number | null>(null)
+  const [selectedMemberCommittee, setSelectedMemberCommittee] = useState("all")
+  const [selectedMember, setSelectedMember] = useState("all")
   const router = useRouter()
   const searchParams = useSearchParams()
   const tabFromQuery = searchParams.get("tab") || undefined
@@ -715,6 +717,218 @@ export default function CommitteeManagement() {
     printWindow.print()
   }
 
+  const generateIndividualMemberReport = (committeeId: string, memberName: string) => {
+    const committee = committees.find((c) => c.id === committeeId)
+    if (!committee) {
+      alert("Committee not found!")
+      return
+    }
+
+    const member = committee.committeeMembers?.find((m) => m.name === memberName)
+    if (!member) {
+      alert("Member not found!")
+      return
+    }
+
+    const allPayments = JSON.parse(localStorage.getItem(`committee_payments_${committeeId}`) || "[]")
+    const memberPayments = allPayments.filter((p: any) => p.memberName === member.name && p.status === "paid")
+
+    const memberWithdrawals = (committee.monthlyCycles || []).filter(
+      (cycle: any) => cycle.withdrawerName === memberName,
+    )
+
+    const totalPaid = memberPayments.reduce((sum: number, p: any) => sum + (p.amount || 0), 0)
+    const totalWithdrawn = memberWithdrawals.reduce((sum: number, w: any) => sum + (w.withdrawAmount || 0), 0)
+    const expectedTotal = committee.monthlyAmount * committee.duration
+    const lateFees = memberPayments.reduce((sum: number, p: any) => sum + (p.lateFee || 0), 0)
+
+    const printWindow = window.open("", "_blank")
+    if (!printWindow) return
+
+    const printContent = `
+      <html>
+        <head>
+          <title>Individual Member Report - ${memberName}</title>
+          <style>
+            body { font-family: Arial, sans-serif; margin: 20px; line-height: 1.6; }
+            .header { text-align: center; margin-bottom: 30px; border-bottom: 3px solid #f97316; padding-bottom: 20px; }
+            .member-info { margin-bottom: 24px; background: #fff7ed; padding: 20px; border-radius: 8px; border-left: 4px solid #f97316; }
+            .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
+            .summary-card { background: #f8f9fa; padding: 16px; border-radius: 8px; text-align: center; }
+            .summary-card h4 { margin: 0 0 8px 0; color: #64748b; font-size: 14px; }
+            .summary-card .value { font-size: 24px; font-weight: bold; color: #1e293b; }
+            .section { margin-bottom: 24px; }
+            .section h3 { color: #f97316; border-bottom: 2px solid #fed7aa; padding-bottom: 8px; margin-bottom: 16px; }
+            table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+            th, td { border: 1px solid #e2e8f0; padding: 12px; text-align: left; }
+            th { background-color: #fff7ed; font-weight: bold; color: #9a3412; }
+            .total-row { background-color: #fef3c7; font-weight: bold; }
+            @media print { body { margin: 0; } }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <h1>Individual Member Report</h1>
+            <h2>${memberName}</h2>
+            <p>Committee: ${committee.name} (${committee.id})</p>
+            <p>Generated: ${new Date().toLocaleDateString("en-IN")} at ${new Date().toLocaleTimeString("en-IN")}</p>
+          </div>
+
+          <div class="member-info">
+            <h3>Member Information</h3>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+              <div>
+                <p><strong>Name:</strong> ${member.name}</p>
+                <p><strong>Mobile:</strong> ${member.mobile || "N/A"}</p>
+                <p><strong>Email:</strong> ${member.email || "N/A"}</p>
+              </div>
+              <div>
+                <p><strong>Role:</strong> ${member.name === committee.committeeHead ? "Committee Head" : "Member"}</p>
+                <p><strong>Committee Duration:</strong> ${committee.duration} months</p>
+                <p><strong>Monthly Amount:</strong> ₹${committee.monthlyAmount?.toLocaleString()}</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="summary-grid">
+            <div class="summary-card">
+              <h4>Expected Total</h4>
+              <div class="value">₹${expectedTotal.toLocaleString()}</div>
+            </div>
+            <div class="summary-card">
+              <h4>Total Paid</h4>
+              <div class="value" style="color: #10b981;">₹${totalPaid.toLocaleString()}</div>
+            </div>
+            <div class="summary-card">
+              <h4>Total Withdrawn</h4>
+              <div class="value" style="color: #3b82f6;">₹${totalWithdrawn.toLocaleString()}</div>
+            </div>
+            <div class="summary-card">
+              <h4>Late Fees</h4>
+              <div class="value" style="color: #dc2626;">₹${lateFees.toLocaleString()}</div>
+            </div>
+            <div class="summary-card">
+              <h4>Balance</h4>
+              <div class="value" style="color: ${expectedTotal - totalPaid > 0 ? "#dc2626" : "#10b981"};">
+                ₹${Math.abs(expectedTotal - totalPaid).toLocaleString()}
+                ${expectedTotal - totalPaid > 0 ? " (Due)" : " (Paid)"}
+              </div>
+            </div>
+          </div>
+
+          <div class="section">
+            <h3>Payment History</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Month</th>
+                  <th>Payment Date</th>
+                  <th>Amount Paid</th>
+                  <th>Late Fee</th>
+                  <th>Total</th>
+                  <th>Payment Method</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${
+                  memberPayments.length > 0
+                    ? memberPayments
+                        .sort((a: any, b: any) => a.paymentMonth - b.paymentMonth)
+                        .map(
+                          (payment: any) => `
+                          <tr>
+                            <td>Month ${payment.paymentMonth}</td>
+                            <td>${new Date(payment.paymentDate).toLocaleDateString("en-IN")}</td>
+                            <td>₹${payment.amount?.toLocaleString()}</td>
+                            <td>₹${(payment.lateFee || 0).toLocaleString()}</td>
+                            <td>₹${((payment.amount || 0) + (payment.lateFee || 0)).toLocaleString()}</td>
+                            <td>${payment.paymentMethod || "Cash"}</td>
+                          </tr>
+                        `,
+                        )
+                        .join("")
+                    : `<tr><td colspan="6" style="text-align: center; color: #64748b;">No payment records found</td></tr>`
+                }
+              </tbody>
+              ${
+                memberPayments.length > 0
+                  ? `
+                <tfoot>
+                  <tr class="total-row">
+                    <td colspan="2"><strong>TOTAL</strong></td>
+                    <td><strong>₹${totalPaid.toLocaleString()}</strong></td>
+                    <td><strong>₹${lateFees.toLocaleString()}</strong></td>
+                    <td><strong>₹${(totalPaid + lateFees).toLocaleString()}</strong></td>
+                    <td></td>
+                  </tr>
+                </tfoot>
+              `
+                  : ""
+              }
+            </table>
+          </div>
+
+          <div class="section">
+            <h3>Withdrawal History</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Month</th>
+                  <th>Withdrawal Date</th>
+                  <th>Amount Withdrawn</th>
+                  <th>Balance Left</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${
+                  memberWithdrawals.length > 0
+                    ? memberWithdrawals
+                        .sort((a: any, b: any) => a.month - b.month)
+                        .map(
+                          (withdrawal: any) => `
+                          <tr>
+                            <td>Month ${withdrawal.month}</td>
+                            <td>${withdrawal.withdrawalDate ? new Date(withdrawal.withdrawalDate).toLocaleDateString("en-IN") : "Pending"}</td>
+                            <td>₹${(withdrawal.withdrawAmount || 0).toLocaleString()}</td>
+                            <td>₹${(withdrawal.balanceLeft || 0).toLocaleString()}</td>
+                            <td>${withdrawal.withdrawalDate ? "Completed" : "Pending"}</td>
+                          </tr>
+                        `,
+                        )
+                        .join("")
+                    : `<tr><td colspan="5" style="text-align: center; color: #64748b;">No withdrawal records found</td></tr>`
+                }
+              </tbody>
+              ${
+                memberWithdrawals.length > 0
+                  ? `
+                <tfoot>
+                  <tr class="total-row">
+                    <td colspan="2"><strong>TOTAL WITHDRAWN</strong></td>
+                    <td><strong>₹${totalWithdrawn.toLocaleString()}</strong></td>
+                    <td colspan="2"></td>
+                  </tr>
+                </tfoot>
+              `
+                  : ""
+              }
+            </table>
+          </div>
+
+          <div style="margin-top: 40px; padding-top: 20px; border-top: 2px solid #e2e8f0; text-align: center; color: #64748b;">
+            <p>This individual member report was generated on ${new Date().toLocaleString()}</p>
+            <p style="font-size: 12px;">Suraksha Savings Society - Committee Management System</p>
+          </div>
+        </body>
+      </html>
+    `
+
+    printWindow.document.write(printContent)
+    printWindow.document.close()
+    printWindow.print()
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50">
       {/* Header */}
@@ -914,7 +1128,7 @@ export default function CommitteeManagement() {
 
           {/* Enhanced Committee Reports Tab */}
           <TabsContent value="reports" className="space-y-6">
-            <div className="grid lg:grid-cols-3 gap-6">
+            <div className="grid lg:grid-cols-2 gap-6">
               {/* Monthly Reports Card */}
               <Card className="hover:shadow-lg transition-all duration-300 border-l-4 border-l-blue-500">
                 <CardHeader className="pb-3">
@@ -1123,6 +1337,108 @@ export default function CommitteeManagement() {
                   </Button>
                 </CardContent>
               </Card>
+
+              <Card className="hover:shadow-lg transition-all duration-300 border-l-4 border-l-orange-500">
+                <CardHeader className="pb-3">
+                  <div className="flex items-center space-x-3">
+                    <div className="p-3 bg-orange-100 rounded-xl">
+                      <Users className="h-6 w-6 text-orange-600" />
+                    </div>
+                    <div>
+                      <CardTitle className="text-lg text-slate-800">Individual Member Reports</CardTitle>
+                      <CardDescription className="text-slate-600">Member payment & withdrawal details</CardDescription>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="space-y-3">
+                    <div>
+                      <label className="text-sm font-medium text-slate-700">Select Committee</label>
+                      <Select value={selectedMemberCommittee} onValueChange={setSelectedMemberCommittee}>
+                        <SelectTrigger className="border-slate-300">
+                          <SelectValue placeholder="Choose committee" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {committees.map((committee) => (
+                            <SelectItem key={committee.id} value={committee.id}>
+                              {committee.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {selectedMemberCommittee !== "all" && (
+                      <div>
+                        <label className="text-sm font-medium text-slate-700">Select Member</label>
+                        <Select value={selectedMember} onValueChange={setSelectedMember}>
+                          <SelectTrigger className="border-slate-300">
+                            <SelectValue placeholder="Choose member" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {committees
+                              .find((c) => c.id === selectedMemberCommittee)
+                              ?.committeeMembers?.map((member: any) => (
+                                <SelectItem key={member.name} value={member.name}>
+                                  {member.name}
+                                  {member.name ===
+                                  committees.find((c) => c.id === selectedMemberCommittee)?.committeeHead
+                                    ? " (Head)"
+                                    : ""}
+                                </SelectItem>
+                              ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+                  </div>
+
+                  {selectedMemberCommittee !== "all" && selectedMember !== "all" && (
+                    <div className="bg-orange-50 p-3 rounded-lg">
+                      <p className="text-xs text-orange-600 mb-1">Member Summary</p>
+                      <div className="grid grid-cols-2 gap-2 text-sm">
+                        <div>
+                          <p className="text-orange-800 font-semibold">
+                            Paid: ₹{(() => {
+                              const payments = JSON.parse(
+                                localStorage.getItem(`committee_payments_${selectedMemberCommittee}`) || "[]",
+                              )
+                              return payments
+                                .filter((p: any) => p.memberName === selectedMember && p.status === "paid")
+                                .reduce((sum: number, p: any) => sum + (p.amount || 0), 0)
+                                .toLocaleString()
+                            })()}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-orange-800 font-semibold">
+                            Withdrawn: ₹{(() => {
+                              const committee = committees.find((c) => c.id === selectedMemberCommittee)
+                              return (committee?.monthlyCycles || [])
+                                .filter((cycle: any) => cycle.withdrawerName === selectedMember)
+                                .reduce((sum: number, w: any) => sum + (w.withdrawAmount || 0), 0)
+                                .toLocaleString()
+                            })()}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  <Button
+                    className="w-full bg-orange-600 hover:bg-orange-700"
+                    onClick={() => {
+                      if (selectedMemberCommittee !== "all" && selectedMember !== "all") {
+                        generateIndividualMemberReport(selectedMemberCommittee, selectedMember)
+                      }
+                    }}
+                    disabled={selectedMemberCommittee === "all" || selectedMember === "all"}
+                  >
+                    <FileText className="h-4 w-4 mr-2" />
+                    Generate Member Report
+                  </Button>
+                </CardContent>
+              </Card>
             </div>
           </TabsContent>
 
@@ -1221,5 +1537,37 @@ export default function CommitteeManagement() {
         </Tabs>
       </div>
     </div>
+  )
+}
+
+function CommitteeManagementLoading() {
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50">
+      <header className="bg-white shadow-sm border-b border-slate-200">
+        <div className="container mx-auto px-4 py-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-4">
+              <div className="h-9 w-32 bg-slate-200 animate-pulse rounded" />
+              <div>
+                <div className="h-8 w-64 bg-slate-200 animate-pulse rounded mb-2" />
+                <div className="h-4 w-96 bg-slate-200 animate-pulse rounded" />
+              </div>
+            </div>
+            <div className="h-8 w-32 bg-slate-200 animate-pulse rounded-full" />
+          </div>
+        </div>
+      </header>
+      <div className="container mx-auto px-4 py-8">
+        <div className="h-96 bg-white rounded-lg shadow-sm animate-pulse" />
+      </div>
+    </div>
+  )
+}
+
+export default function CommitteeManagement() {
+  return (
+    <Suspense fallback={<CommitteeManagementLoading />}>
+      <CommitteeManagementContent />
+    </Suspense>
   )
 }

@@ -31,6 +31,7 @@ import {
   Crown,
   IndianRupee,
   Trash2,
+  FileText,
 } from "lucide-react"
 import { wipeCommitteeAndRefresh } from "@/lib/committee-storage"
 
@@ -93,6 +94,25 @@ interface MemberPaymentStatus {
   monthlyPayments: { [month: number]: Payment | null }
   status: "paid" | "pending" | "overdue"
   nextDueDate: string
+}
+
+// Added interface for member report data
+interface MemberReportData {
+  payments: Payment[]
+  totalPaid: number
+  totalLateFees: number
+  expectedTotal: number
+  balance: number
+  paymentCount: number
+}
+
+// Added interface for withdrawal data in member report
+interface MemberWithdrawal {
+  month: number
+  amount: number
+  date: string
+  isHead: boolean
+  lossPercentage: number
 }
 
 export default function CommitteeDetailsPage() {
@@ -166,6 +186,9 @@ export default function CommitteeDetailsPage() {
   const [showEditDialog, setShowEditDialog] = useState(false)
   const [editingPayment, setEditingPayment] = useState<Payment | null>(null)
 
+  const [showMemberReport, setShowMemberReport] = useState(false)
+  const [selectedMemberForReport, setSelectedMemberForReport] = useState<string>("")
+
   useEffect(() => {
     const loadCommitteeDetails = () => {
       try {
@@ -191,6 +214,12 @@ export default function CommitteeDetailsPage() {
             if (savedPayments) {
               loadedPayments = JSON.parse(savedPayments)
               setPayments(loadedPayments)
+            }
+
+            // Load late fee settings
+            const savedLateFeeSettings = localStorage.getItem(`committee_late_fee_settings_${params.id}`)
+            if (savedLateFeeSettings) {
+              setLateFeeSettings(JSON.parse(savedLateFeeSettings))
             }
 
             // Calculate current committee month and member statuses
@@ -925,7 +954,226 @@ export default function CommitteeDetailsPage() {
     committee?.status?.toLowerCase() === "completed" ||
     committee?.monthlyCycles?.length >= committee?.duration ||
     committee?.completedAt
+  // Removed redeclaration of committeeStatus
   const committeeStatus = isCommitteeCompleted ? "Closed" : "Active"
+
+  const getMemberWithdrawals = (memberName: string): MemberWithdrawal[] => {
+    if (!committee?.monthlyCycles) return []
+    return committee.monthlyCycles
+      .filter((cycle) => cycle.withdrawerName === memberName)
+      .map((cycle) => ({
+        month: cycle.month,
+        amount: cycle.withdrawAmount,
+        date: cycle.withdrawalDate,
+        isHead: cycle.isHead,
+        lossPercentage: cycle.lossPercentage,
+      }))
+  }
+
+  const getMemberPaymentDetails = (memberName: string): MemberReportData => {
+    const memberPayments = payments.filter((p) => p.memberName === memberName)
+    const totalPaid = memberPayments.reduce((sum, p) => sum + p.amount, 0)
+    const totalLateFees = memberPayments.reduce((sum, p) => sum + p.lateFees, 0)
+    const expectedTotal = committee ? committee.monthlyAmount * currentCommitteeMonth : 0
+    const balance = expectedTotal - totalPaid
+
+    return {
+      payments: memberPayments,
+      totalPaid,
+      totalLateFees,
+      expectedTotal,
+      balance,
+      paymentCount: memberPayments.length,
+    }
+  }
+
+  const handlePrintMemberReport = (memberName: string) => {
+    const memberDetails = getMemberPaymentDetails(memberName)
+    const memberWithdrawals = getMemberWithdrawals(memberName)
+    const member = committee?.committeeMembers.find((m) => m.name === memberName)
+
+    const printWindow = window.open("", "_blank")
+    if (!printWindow) return
+
+    const printContent = `
+      <html>
+        <head>
+          <title>Member Report - ${memberName}</title>
+          <style>
+            body { font-family: Arial, sans-serif; margin: 20px; }
+            .header { text-align: center; margin-bottom: 30px; border-bottom: 3px solid #1e40af; padding-bottom: 20px; }
+            .header h1 { color: #1e40af; margin-bottom: 10px; }
+            .member-info { background: #f8fafc; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
+            .member-info p { margin: 5px 0; }
+            .section { margin-bottom: 30px; }
+            .section h3 { color: #1e40af; border-bottom: 2px solid #e5e7eb; padding-bottom: 8px; margin-bottom: 15px; }
+            table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+            th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+            th { background-color: #1e40af; color: white; }
+            tbody tr:nth-child(even) { background-color: #f9fafb; }
+            .summary-box { background: #e0f2fe; padding: 15px; border-radius: 8px; margin: 20px 0; }
+            .summary-box h4 { color: #1e40af; margin-bottom: 10px; }
+            .summary-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+            .summary-item { display: flex; justify-content: space-between; padding: 5px 0; }
+            .summary-item strong { color: #374151; }
+            .total-row { background-color: #1e40af !important; color: white; font-weight: bold; }
+            .positive { color: #059669; font-weight: 600; }
+            .negative { color: #dc2626; font-weight: 600; }
+            .footer { margin-top: 40px; padding-top: 20px; border-top: 2px solid #e5e7eb; text-align: center; color: #6b7280; font-size: 14px; }
+            @media print { body { margin: 0; } }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <h1>INDIVIDUAL MEMBER REPORT</h1>
+            <h2>${committee?.name}</h2>
+            <p>Generated on: ${new Date().toLocaleDateString("en-IN")} at ${new Date().toLocaleTimeString("en-IN")}</p>
+          </div>
+
+          <div class="member-info">
+            <h3>Member Information</h3>
+            <p><strong>Name:</strong> ${memberName}</p>
+            <p><strong>Mobile:</strong> ${member?.mobile || "N/A"}</p>
+            <p><strong>Email:</strong> ${member?.email || "N/A"}</p>
+            <p><strong>Address:</strong> ${member?.address || "N/A"}</p>
+            ${memberName === committee?.committeeHead ? '<p><strong>Role:</strong> <span style="color: #d97706;">Committee Head</span></p>' : ""}
+          </div>
+
+          <div class="summary-box">
+            <h4>Financial Summary</h4>
+            <div class="summary-grid">
+              <div class="summary-item">
+                <span>Expected Total Contribution:</span>
+                <strong>₹${memberDetails.expectedTotal.toLocaleString("en-IN")}</strong>
+              </div>
+              <div class="summary-item">
+                <span>Total Paid:</span>
+                <strong class="positive">₹${memberDetails.totalPaid.toLocaleString("en-IN")}</strong>
+              </div>
+              <div class="summary-item">
+                <span>Total Late Fees:</span>
+                <strong class="${memberDetails.totalLateFees > 0 ? "negative" : ""}">₹${memberDetails.totalLateFees.toLocaleString("en-IN")}</strong>
+              </div>
+              <div class="summary-item">
+                <span>Balance:</span>
+                <strong class="${memberDetails.balance > 0 ? "negative" : "positive"}">₹${Math.abs(memberDetails.balance).toLocaleString("en-IN")} ${memberDetails.balance > 0 ? "(Due)" : "(Paid)"}</strong>
+              </div>
+              <div class="summary-item">
+                <span>Number of Payments:</span>
+                <strong>${memberDetails.paymentCount}</strong>
+              </div>
+              <div class="summary-item">
+                <span>Total Withdrawals:</span>
+                <strong class="positive">₹${memberWithdrawals.reduce((sum, w) => sum + w.amount, 0).toLocaleString("en-IN")}</strong>
+              </div>
+            </div>
+          </div>
+
+          <div class="section">
+            <h3>Payment History</h3>
+            ${
+              memberDetails.payments.length > 0
+                ? `
+              <table>
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Month</th>
+                    <th>Amount</th>
+                    <th>Late Fee</th>
+                    <th>Total</th>
+                    <th>Payment Mode</th>
+                    <th>Status</th>
+                    <th>Remarks</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${memberDetails.payments
+                    .map(
+                      (payment) => `
+                    <tr>
+                      <td>${new Date(payment.paymentDate).toLocaleDateString("en-IN")}</td>
+                      <td>Month ${payment.paymentMonth}</td>
+                      <td>₹${(payment.amount - payment.lateFees).toLocaleString("en-IN")}</td>
+                      <td class="${payment.lateFees > 0 ? "negative" : ""}">₹${payment.lateFees.toLocaleString("en-IN")}</td>
+                      <td><strong>₹${payment.amount.toLocaleString("en-IN")}</strong></td>
+                      <td style="text-transform: capitalize;">${payment.paymentMode}</td>
+                      <td style="text-transform: capitalize;">${payment.status}</td>
+                      <td>${payment.remarks || "-"}</td>
+                    </tr>
+                  `,
+                    )
+                    .join("")}
+                  <tr class="total-row">
+                    <td colspan="2">TOTAL</td>
+                    <td>₹${(memberDetails.totalPaid - memberDetails.totalLateFees).toLocaleString("en-IN")}</td>
+                    <td>₹${memberDetails.totalLateFees.toLocaleString("en-IN")}</td>
+                    <td>₹${memberDetails.totalPaid.toLocaleString("en-IN")}</td>
+                    <td colspan="3"></td>
+                  </tr>
+                </tbody>
+              </table>
+            `
+                : '<p style="text-align: center; color: #6b7280; padding: 20px;">No payments recorded yet.</p>'
+            }
+          </div>
+
+          <div class="section">
+            <h3>Withdrawal History</h3>
+            ${
+              memberWithdrawals.length > 0
+                ? `
+              <table>
+                <thead>
+                  <tr>
+                    <th>Month</th>
+                    <th>Withdrawal Date</th>
+                    <th>Amount</th>
+                    <th>Loss %</th>
+                    <th>Type</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${memberWithdrawals
+                    .map(
+                      (withdrawal) => `
+                    <tr>
+                      <td>Month ${withdrawal.month}</td>
+                      <td>${new Date(withdrawal.date).toLocaleDateString("en-IN")}</td>
+                      <td class="positive"><strong>₹${withdrawal.amount.toLocaleString("en-IN")}</strong></td>
+                      <td>${withdrawal.lossPercentage}%</td>
+                      <td>${withdrawal.isHead ? '<span style="color: #d97706;">Head Withdrawal</span>' : "Regular"}</td>
+                    </tr>
+                  `,
+                    )
+                    .join("")}
+                  <tr class="total-row">
+                    <td colspan="2">TOTAL WITHDRAWALS</td>
+                    <td>₹${memberWithdrawals.reduce((sum, w) => sum + w.amount, 0).toLocaleString("en-IN")}</td>
+                    <td colspan="2"></td>
+                  </tr>
+                </tbody>
+              </table>
+            `
+                : '<p style="text-align: center; color: #6b7280; padding: 20px;">No withdrawals recorded yet.</p>'
+            }
+          </div>
+
+          <div class="footer">
+            <p>This is a computer-generated report for ${memberName}</p>
+            <p><strong>${committee?.name}</strong> | Suraksha Savings Society</p>
+          </div>
+        </body>
+      </html>
+    `
+
+    printWindow.document.write(printContent)
+    printWindow.document.close()
+    printWindow.print()
+  }
+
+  // Corrected committeeStatus declaration to avoid redeclaration
+  const currentCommitteeStatus = isCommitteeCompleted ? "Closed" : "Active"
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background to-muted">
@@ -947,8 +1195,12 @@ export default function CommitteeDetailsPage() {
               </div>
             </div>
             <div className="flex items-center space-x-2">
-              <Badge className={committeeStatus === "Closed" ? "bg-red-100 text-red-800" : "bg-blue-100 text-blue-800"}>
-                {committeeStatus}
+              <Badge
+                className={
+                  currentCommitteeStatus === "Closed" ? "bg-red-100 text-red-800" : "bg-blue-100 text-blue-800"
+                }
+              >
+                {currentCommitteeStatus}
               </Badge>
               <Button
                 variant="destructive"
@@ -1441,6 +1693,7 @@ export default function CommitteeDetailsPage() {
                     <TableHead>Current Month Status</TableHead>
                     <TableHead>Total Paid</TableHead>
                     <TableHead>Next Due Date</TableHead>
+                    <TableHead>Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -1477,6 +1730,24 @@ export default function CommitteeDetailsPage() {
                             "-"
                           )}
                         </TableCell>
+                        <TableCell>
+                          <div className="flex space-x-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                setSelectedMemberForReport(member.name)
+                                setShowMemberReport(true)
+                              }}
+                            >
+                              <FileText className="h-4 w-4 mr-1" />
+                              View Report
+                            </Button>
+                            <Button variant="outline" size="sm" onClick={() => handlePrintMemberReport(member.name)}>
+                              <Printer className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
                       </TableRow>
                     )
                   })}
@@ -1485,6 +1756,203 @@ export default function CommitteeDetailsPage() {
             </div>
           </CardContent>
         </Card>
+
+        {showMemberReport && selectedMemberForReport && (
+          <Card className="mb-6 border-blue-200">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle className="flex items-center">
+                  <FileText className="h-5 w-5 mr-2 text-blue-600" />
+                  Individual Member Report - {selectedMemberForReport}
+                </CardTitle>
+                <div className="flex space-x-2">
+                  <Button variant="outline" onClick={() => handlePrintMemberReport(selectedMemberForReport)}>
+                    <Printer className="h-4 w-4 mr-2" />
+                    Print Report
+                  </Button>
+                  <Button variant="outline" onClick={() => setShowMemberReport(false)}>
+                    <X className="h-4 w-4 mr-2" />
+                    Close
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {(() => {
+                const memberDetails = getMemberPaymentDetails(selectedMemberForReport)
+                const memberWithdrawals = getMemberWithdrawals(selectedMemberForReport)
+                const member = committee.committeeMembers.find((m) => m.name === selectedMemberForReport)
+
+                return (
+                  <>
+                    {/* Member Info */}
+                    <div className="bg-muted p-4 rounded-lg">
+                      <h4 className="font-semibold mb-3">Member Information</h4>
+                      <div className="grid grid-cols-2 gap-3 text-sm">
+                        <div>
+                          <span className="text-muted-foreground">Name:</span>
+                          <p className="font-medium">{selectedMemberForReport}</p>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">Mobile:</span>
+                          <p className="font-medium">{member?.mobile}</p>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">Email:</span>
+                          <p className="font-medium">{member?.email}</p>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">Role:</span>
+                          <p className="font-medium">
+                            {selectedMemberForReport === committee.committeeHead ? "Committee Head" : "Member"}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Financial Summary */}
+                    <div className="bg-blue-50 p-4 rounded-lg">
+                      <h4 className="font-semibold mb-3 text-blue-800">Financial Summary</h4>
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
+                        <div>
+                          <span className="text-muted-foreground">Expected Total:</span>
+                          <p className="font-semibold text-lg">₹{memberDetails.expectedTotal.toLocaleString()}</p>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">Total Paid:</span>
+                          <p className="font-semibold text-lg text-green-600">
+                            ₹{memberDetails.totalPaid.toLocaleString()}
+                          </p>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">Late Fees:</span>
+                          <p
+                            className={`font-semibold text-lg ${memberDetails.totalLateFees > 0 ? "text-red-600" : ""}`}
+                          >
+                            ₹{memberDetails.totalLateFees.toLocaleString()}
+                          </p>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">Balance:</span>
+                          <p
+                            className={`font-semibold text-lg ${memberDetails.balance > 0 ? "text-red-600" : "text-green-600"}`}
+                          >
+                            ₹{Math.abs(memberDetails.balance).toLocaleString()}{" "}
+                            {memberDetails.balance > 0 ? "(Due)" : "(Paid)"}
+                          </p>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">Payments Made:</span>
+                          <p className="font-semibold text-lg">{memberDetails.paymentCount}</p>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">Total Withdrawals:</span>
+                          <p className="font-semibold text-lg text-green-600">
+                            ₹{memberWithdrawals.reduce((sum, w) => sum + w.amount, 0).toLocaleString()}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Payment History */}
+                    <div>
+                      <h4 className="font-semibold mb-3">Payment History</h4>
+                      {memberDetails.payments.length > 0 ? (
+                        <div className="overflow-x-auto">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>Date</TableHead>
+                                <TableHead>Month</TableHead>
+                                <TableHead>Amount</TableHead>
+                                <TableHead>Late Fee</TableHead>
+                                <TableHead>Total</TableHead>
+                                <TableHead>Mode</TableHead>
+                                <TableHead>Status</TableHead>
+                                <TableHead>Remarks</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {memberDetails.payments.map((payment) => (
+                                <TableRow key={payment.id}>
+                                  <TableCell>{new Date(payment.paymentDate).toLocaleDateString("en-IN")}</TableCell>
+                                  <TableCell>
+                                    <Badge variant="outline">Month {payment.paymentMonth}</Badge>
+                                  </TableCell>
+                                  <TableCell>₹{(payment.amount - payment.lateFees).toLocaleString()}</TableCell>
+                                  <TableCell>
+                                    {payment.lateFees > 0 ? (
+                                      <span className="text-red-600 font-medium">
+                                        ₹{payment.lateFees.toLocaleString()}
+                                      </span>
+                                    ) : (
+                                      <span className="text-gray-400">₹0</span>
+                                    )}
+                                  </TableCell>
+                                  <TableCell className="font-semibold">₹{payment.amount.toLocaleString()}</TableCell>
+                                  <TableCell className="capitalize">{payment.paymentMode}</TableCell>
+                                  <TableCell>
+                                    <Badge className={getStatusBadgeColor(payment.status)}>{payment.status}</Badge>
+                                  </TableCell>
+                                  <TableCell>{payment.remarks || "-"}</TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      ) : (
+                        <p className="text-center text-muted-foreground py-8">No payments recorded yet.</p>
+                      )}
+                    </div>
+
+                    {/* Withdrawal History */}
+                    <div>
+                      <h4 className="font-semibold mb-3">Withdrawal History</h4>
+                      {memberWithdrawals.length > 0 ? (
+                        <div className="overflow-x-auto">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>Month</TableHead>
+                                <TableHead>Date</TableHead>
+                                <TableHead>Amount</TableHead>
+                                <TableHead>Loss %</TableHead>
+                                <TableHead>Type</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {memberWithdrawals.map((withdrawal, idx) => (
+                                <TableRow key={idx}>
+                                  <TableCell>
+                                    <Badge variant="outline">Month {withdrawal.month}</Badge>
+                                  </TableCell>
+                                  <TableCell>{new Date(withdrawal.date).toLocaleDateString("en-IN")}</TableCell>
+                                  <TableCell className="font-semibold text-green-600">
+                                    ₹{withdrawal.amount.toLocaleString()}
+                                  </TableCell>
+                                  <TableCell>{withdrawal.lossPercentage}%</TableCell>
+                                  <TableCell>
+                                    {withdrawal.isHead ? (
+                                      <Badge className="bg-gold-100 text-gold-800">Head Withdrawal</Badge>
+                                    ) : (
+                                      "Regular"
+                                    )}
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      ) : (
+                        <p className="text-center text-muted-foreground py-8">No withdrawals recorded yet.</p>
+                      )}
+                    </div>
+                  </>
+                )
+              })()}
+            </CardContent>
+          </Card>
+        )}
 
         {/* Make Payment */}
         <Card className="mb-6">
@@ -1622,7 +2090,7 @@ export default function CommitteeDetailsPage() {
                   </div>
                 </div>
 
-                <div className="flex gap-2">
+                <div className="flex space-x-2">
                   <Button type="submit" disabled={multiPaymentForm.selectedMembers.length === 0}>
                     Record Payments ({multiPaymentForm.selectedMembers.length} members)
                   </Button>
@@ -1632,7 +2100,6 @@ export default function CommitteeDetailsPage() {
                 </div>
               </form>
             ) : (
-              // ... existing single payment form code ...
               <form onSubmit={handlePaymentSubmit} className="space-y-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
@@ -1982,7 +2449,7 @@ export default function CommitteeDetailsPage() {
                     ) {
                       const updatedPayments = payments.filter((payment) => !selectedPayments.includes(payment.id))
                       setPayments(updatedPayments)
-                      localStorage.setItem(`committee_payments_${params.id}`, JSON.stringify(updatedPayments))
+                      localStorage.setItem(`committee_payments_${params.id}`, JSON.JSON.stringify(updatedPayments))
 
                       // Uncheck select all
                       const selectAllCheckbox = document.getElementById("selectAll") as HTMLInputElement
